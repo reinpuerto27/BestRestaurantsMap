@@ -133,10 +133,13 @@
     <img id="lightbox-img" src="" />
   </div>
 
-  <script>
+<!-- REPLACE YOUR <script> SECTION WITH THIS UPDATED ONE -->
+<script>
     let map, infoWindow, placesService;
     let markers = [];
     let currentReviews = [];
+    let photoUrls = [];
+    let currentPhotoIndex = 0;
 
     async function initMap() {
       const { Map } = await google.maps.importLibrary("maps");
@@ -198,7 +201,6 @@
       const minRating = parseFloat(document.getElementById("rating-filter").value);
       const priceFilter = parseInt(document.getElementById("price-filter").value);
 
-
       placesService.nearbySearch(
         {
           location,
@@ -251,6 +253,8 @@
     function showSidebar(details) {
       const sidebar = document.getElementById("review-sidebar");
       currentReviews = details.reviews || [];
+      photoUrls = (details.photos || []).map(p => p.getUrl());
+      currentPhotoIndex = 0;
 
       sidebar.innerHTML = `
         <button id="close-sidebar-btn" onclick="hideSidebar()">✕</button>
@@ -260,7 +264,7 @@
         ${typeof details.price_level === "number" 
           ? `<p><strong>Price Range:</strong> ${getPriceRange(details.price_level)}</p>` 
           : "<p><strong>Price Range:</strong> Unknown</p>"}
-        ${renderPhotos(details.photos)}
+        ${renderPhotos()}<br>
         <label for="review-rating-filter">Filter Reviews by Rating:</label>
         <select id="review-rating-filter" onchange="renderReviews()">
           <option value="0">All</option>
@@ -277,11 +281,68 @@
       sidebar.style.display = "block";
     }
 
-    function renderPhotos(photos = []) {
-      if (!photos.length) return "";
-      const thumbs = photos.slice(0, 3).map(p => `<img class="photo-thumb" src="${p.getUrl()}" onclick="showLightbox('${p.getUrl()}')"/>`).join("");
-      return `<div class="photo-container">${thumbs}</div>`;
+    function renderPhotos() {
+      if (!photoUrls.length) return "";
+
+      const first3 = photoUrls.slice(0, 3);
+      const extras = photoUrls.slice(3);
+
+      let html = `<div class="photo-container">`;
+      first3.forEach((url, i) => {
+        html += `<img class="photo-thumb" src="${url}" onclick="openLightbox(${i})"/>`;
+      });
+      html += `</div>`;
+
+      if (extras.length) {
+        html += `
+          <button id="toggle-photos-btn" onclick="togglePhotos()">+${extras.length} photos</button>
+          <div id="extra-photos" style="display: none; flex-wrap: wrap; gap: 4px; margin-top: 8px;">
+            ${extras.map((url, i) => `<img class="photo-thumb" src="${url}" onclick="openLightbox(${i + 3})"/>`).join("")}
+          </div>
+        `;
+      }
+
+      return html;
     }
+
+    function togglePhotos() {
+      const container = document.getElementById("extra-photos");
+      const btn = document.getElementById("toggle-photos-btn");
+
+      if (container.style.display === "none") {
+        container.style.display = "flex";
+        btn.innerText = "Show less photos";
+      } else {
+        container.style.display = "none";
+        btn.innerText = `+${photoUrls.length - 3} photos`;
+      }
+    }
+
+    function openLightbox(index) {
+      currentPhotoIndex = index;
+      document.getElementById("lightbox-img").src = photoUrls[index];
+      document.getElementById("lightbox").style.display = "flex";
+    }
+
+    function closeLightbox() {
+      document.getElementById("lightbox").style.display = "none";
+      document.getElementById("lightbox-img").src = "";
+    }
+
+    document.addEventListener("keydown", (e) => {
+      const lightbox = document.getElementById("lightbox");
+      if (lightbox.style.display === "flex") {
+        if (e.key === "ArrowRight") {
+          currentPhotoIndex = (currentPhotoIndex + 1) % photoUrls.length;
+          document.getElementById("lightbox-img").src = photoUrls[currentPhotoIndex];
+        } else if (e.key === "ArrowLeft") {
+          currentPhotoIndex = (currentPhotoIndex - 1 + photoUrls.length) % photoUrls.length;
+          document.getElementById("lightbox-img").src = photoUrls[currentPhotoIndex];
+        } else if (e.key === "Escape") {
+          closeLightbox();
+        }
+      }
+    });
 
     function renderReviews() {
       const min = parseInt(document.getElementById("review-rating-filter").value);
@@ -329,17 +390,6 @@
       markers = [];
     }
 
-    function showLightbox(url) {
-      const lightbox = document.getElementById("lightbox");
-      document.getElementById("lightbox-img").src = url;
-      lightbox.style.display = "flex";
-    }
-
-    function closeLightbox() {
-      document.getElementById("lightbox").style.display = "none";
-      document.getElementById("lightbox-img").src = "";
-    }
-
     function getPriceRange(level) {
       switch (level) {
         case 0: return "Free";
@@ -350,6 +400,6 @@
         default: return "Unknown";
       }
     }
-  </script>
-</body>
+    </script>
+  </body>
 </html>
