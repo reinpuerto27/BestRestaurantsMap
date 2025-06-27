@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Best Restaurants</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyA42kcFypVD5jckF8TcqvgQy2O7EfcJmW4&libraries=places&v=weekly" onload="initMap()"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    html, body {
+      height: 100%; margin: 0; padding: 0;
+      font-family: Calibri, sans-serif;
+    }
+    #map { height: 100%; width: 100%; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 5;
+      display: flex;
+      gap: 10px;
+      background: white;
+      padding: 8px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    #review-sidebar {
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 330px;
+      height: 100%;
+      overflow-y: auto;
+      background: #fff;
+      z-index: 6;
+      padding: 16px;
+      box-shadow: 2px 0 6px rgba(0, 0, 0, 0.2);
+    }
+    #close-sidebar-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      font-size: 16px;
+      background: #eee;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 4px 8px;
+    }
+    .photo-thumb {
+      width: 90px;
+      height: 90px;
+      object-fit: cover;
+      border-radius: 6px;
+      margin: 4px;
+      cursor: pointer;
+    }
+    .photo-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 10px;
+    }
+    .review {
+      margin-bottom: 12px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    .read-more {
+      color: blue;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    #toggle-photos-btn {
+      margin: 8px 0;
+      padding: 6px 10px;
+      background: #eee;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #lightbox {
+      display: none;
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 999;
+      justify-content: center;
+      align-items: center;
+    }
+    #lightbox img {
+      max-width: 90%;
+      max-height: 90%;
+      border-radius: 8px;
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.4);
+      cursor: pointer;
+    }
+    #review-rating-filter {
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input id="search-input" type="text" placeholder="Search location..." />
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <label for="rating-filter">⭐ Min Rating:</label>
+      <input type="range" id="rating-filter" min="0" max="5" step="0.1" value="0" />
+      <span id="rating-value">0</span>
+    </div>
+    <select id="price-filter">
+      <option value="-1">All Prices</option>
+      <option value="0">Free</option>
+      <option value="1">₱100–₱200</option>
+      <option value="2">₱200–₱400</option>
+      <option value="3">₱400–₱700</option>
+      <option value="4">₱700+</option>
+    </select>
+    <input id="min-reviews" type="number" placeholder="Min reviews" min="0" style="width: 100px;">
+  </div>
+
+  <div id="review-sidebar">
+    <button id="close-sidebar-btn" onclick="hideSidebar()">✕</button>
+  </div>
+
+  <div id="map"></div>
+
+  <div id="lightbox" onclick="closeLightbox()">
+    <img id="lightbox-img" src="" />
+  </div>
+
+<!-- REPLACE YOUR <script> SECTION WITH THIS UPDATED ONE -->
+<script>
+    let map, infoWindow, placesService;
+    let markers = [];
+    let currentReviews = [];
+    let photoUrls = [];
+    let currentPhotoIndex = 0;
+    let directionsService;
+    let directionsRenderer;
+
+    async function initMap() {
+      const { Map } = await google.maps.importLibrary("maps");
+      const { PlacesService } = await google.maps.importLibrary("places");
+
+      const defaultLocation = { lat: 14.5995, lng: 120.9842 }; // Manila
+      map = new Map(document.getElementById("map"), {
+        center: defaultLocation,
+        zoom: 15,
+      });
+
+      directionsService = new google.maps.DirectionsService();
+      directionsRenderer = new google.maps.DirectionsRenderer({ suppressMarkers: true });
+      directionsRenderer.setMap(map);
+
+      placesService = new PlacesService(map);
+      infoWindow = new google.maps.InfoWindow();
+
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const userLoc = {
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+            };
+            map.setCenter(userLoc);
+            searchNearby(userLoc);
+          },
+          () => searchNearby(defaultLocation)
+        );
+      } else {
+        searchNearby(defaultLocation);
+      }
+
+      const input = document.getElementById("search-input");
+      const autocomplete = new google.maps.places.Autocomplete(input);
+      autocomplete.bindTo("bounds", map);
+      autocomplete.addListener("place_changed", () => {
+        const place = autocomplete.getPlace();
+        if (!place.geometry || !place.geometry.location) return;
+        map.panTo(place.geometry.location);
+        map.setZoom(15);
+        searchNearby(place.geometry.location);
+      });
+
+      const ratingSlider = document.getElementById("rating-filter");
+      const ratingValue = document.getElementById("rating-value");
+
+      ratingSlider.addEventListener("input", () => {
+        ratingValue.textContent = ratingSlider.value;
+        searchNearby(map.getCenter());
+      });
+
+
+      document.getElementById("price-filter").addEventListener("change", () => {
+        searchNearby(map.getCenter());
+      });
+
+      map.addListener("dragend", () => {
+        searchNearby(map.getCenter());
+      });
+
+      document.getElementById("min-reviews").addEventListener("input", () => {
+        searchNearby(map.getCenter());
+      });
+    }
+
+    function searchNearby(location) {
+      clearMarkers();
+      hideSidebar();
+
+      const minRating = parseFloat(document.getElementById("rating-filter").value);
+      const priceFilter = parseInt(document.getElementById("price-filter").value);
+      const minReviews = parseInt(document.getElementById("min-reviews").value) || 0;
+
+      placesService.nearbySearch(
+        {
+          location,
+          radius: 1500,
+          type: "restaurant",
+        },
+        (results, status) => {
+          if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+            results.forEach((place) => {
+              if (
+                place.rating >= minRating &&
+                (isNaN(priceFilter) || priceFilter === -1 || place.price_level === priceFilter) &&
+                (place.user_ratings_total || 0) >= minReviews
+              ) {
+                createMarker(place);
+              }
+            });
+          }
+        }
+      );
+    }
+
+    function createMarker(place) {
+      const marker = new google.maps.Marker({
+        position: place.geometry.location,
+        map,
+        title: place.name,
+      });
+
+      markers.push(marker);
+
+      marker.addListener("click", () => {
+        placesService.getDetails({
+          placeId: place.place_id,
+          fields: ["name", "vicinity", "rating", "user_ratings_total", "reviews", "photos", "price_level", "geometry", "formatted_phone_number",
+          "website",
+          "opening_hours",
+        ],
+        }, (details, status) => {
+          if (status === google.maps.places.PlacesServiceStatus.OK) {
+            infoWindow.setContent(`
+              <div>
+                <strong>${details.name}</strong><br>
+                <small>${details.vicinity}</small><br>
+                <small>${details.rating}⭐ (${details.user_ratings_total} reviews)</small>
+              </div>`);
+            infoWindow.open(map, marker);
+            showSidebar(details);
+          }
+        });
+      });
+    }
+
+    function showSidebar(details) {
+      const sidebar = document.getElementById("review-sidebar");
+      currentReviews = details.reviews || [];
+      photoUrls = (details.photos || []).map(p => p.getUrl());
+      currentPhotoIndex = 0;
+
+      const lat = typeof details.geometry.location.lat === 'function' 
+        ? details.geometry.location.lat() 
+        : details.geometry.location.lat;
+      const lng = typeof details.geometry.location.lng === 'function' 
+        ? details.geometry.location.lng() 
+        : details.geometry.location.lng;
+
+      sidebar.innerHTML = `
+        <button id="close-sidebar-btn" onclick="hideSidebar()">✕</button>
+        <h3>${details.name}</h3>
+        <p>${details.vicinity}</p>
+        <p><strong>${details.rating}⭐ (${details.user_ratings_total} reviews)</strong></p>
+        <canvas id="ratingsChart" width="300" height="150" style="margin-bottom: 16px;"></canvas>
+        ${typeof details.price_level === "number" 
+          ? `<p><strong>Price Range:</strong> ${getPriceRange(details.price_level)}</p>` 
+          : "<p><strong>Price Range:</strong> Unknown</p>"}
+        ${details.formatted_phone_number ? `<p><strong>Phone:</strong> ${details.formatted_phone_number}</p>` : ""}
+        ${details.website ? `<p><strong>Website:</strong> <a href="${details.website}" target="_blank">🌐</a></p>` : ""}
+        ${details.opening_hours?.weekday_text 
+          ? `<div><strong>Hours:</strong><ul>${details.opening_hours.weekday_text.map(day => `<li>${day}</li>`).join("")}</ul></div>` 
+          : ""
+        }
+        ${renderPhotos()}<br>
+        <button onclick="getDirections('${details.name}', ${lat}, ${lng})">
+        🚶 Get Directions
+      </button><br>
+      <p id="distance-info" style="margin-top: 4px;"></p>
+        <label for="review-rating-filter">Filter Reviews by Rating:</label>
+        <select id="review-rating-filter" onchange="renderReviews()">
+          <option value="0">All</option>
+          <option value="5">5 stars only</option>
+          <option value="4">4 stars & up</option>
+          <option value="3">3 stars & up</option>
+          <option value="2">2 stars & up</option>
+          <option value="1">1 star & up</option>
+        </select>
+        <div id="review-list"></div>
+      `;
+
+      renderReviews();
+      renderRatingsChart(currentReviews);
+      sidebar.style.display = "block";
+    }
+
+    function renderPhotos() {
+      if (!photoUrls.length) return "";
+
+      const first3 = photoUrls.slice(0, 3);
+      const extras = photoUrls.slice(3);
+
+      let html = `<div class="photo-container">`;
+      first3.forEach((url, i) => {
+        html += `<img class="photo-thumb" src="${url}" onclick="openLightbox(${i})"/>`;
+      });
+      html += `</div>`;
+
+      if (extras.length) {
+        html += `
+          <button id="toggle-photos-btn" onclick="togglePhotos()">+${extras.length} photos</button>
+          <div id="extra-photos" style="display: none; flex-wrap: wrap; gap: 4px; margin-top: 8px;">
+            ${extras.map((url, i) => `<img class="photo-thumb" src="${url}" onclick="openLightbox(${i + 3})"/>`).join("")}
+          </div>
+        `;
+      }
+
+      return html;
+    }
+
+    function getDirections(placeName, destLat, destLng) {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const origin = {
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+            };
+            const destination = { lat: destLat, lng: destLng };
+
+            directionsService.route(
+              {
+                origin,
+                destination,
+                travelMode: google.maps.TravelMode.WALKING,
+              },
+              (result, status) => {
+                if (status === "OK") {
+                  directionsRenderer.setDirections(result);
+                  const leg = result.routes[0].legs[0];
+                  document.getElementById("distance-info").innerHTML = `<strong>Distance:</strong> ${leg.distance.text}`;
+                } else {
+                  alert("Could not get directions: " + status);
+                }
+              }
+            );
+          },
+          () => alert("Geolocation not available")
+        );
+      } else {
+        alert("Geolocation is not supported by your browser.");
+      }
+    }
+
+    function togglePhotos() {
+      const container = document.getElementById("extra-photos");
+      const btn = document.getElementById("toggle-photos-btn");
+
+      if (container.style.display === "none") {
+        container.style.display = "flex";
+        btn.innerText = "Show less photos";
+      } else {
+        container.style.display = "none";
+        btn.innerText = `+${photoUrls.length - 3} photos`;
+      }
+    }
+
+    function openLightbox(index) {
+      currentPhotoIndex = index;
+      document.getElementById("lightbox-img").src = photoUrls[index];
+      document.getElementById("lightbox").style.display = "flex";
+    }
+
+    function closeLightbox() {
+      document.getElementById("lightbox").style.display = "none";
+      document.getElementById("lightbox-img").src = "";
+    }
+
+    document.addEventListener("keydown", (e) => {
+      const lightbox = document.getElementById("lightbox");
+      if (lightbox.style.display === "flex") {
+        if (e.key === "ArrowRight") {
+          currentPhotoIndex = (currentPhotoIndex + 1) % photoUrls.length;
+          document.getElementById("lightbox-img").src = photoUrls[currentPhotoIndex];
+        } else if (e.key === "ArrowLeft") {
+          currentPhotoIndex = (currentPhotoIndex - 1 + photoUrls.length) % photoUrls.length;
+          document.getElementById("lightbox-img").src = photoUrls[currentPhotoIndex];
+        } else if (e.key === "Escape") {
+          closeLightbox();
+        }
+      }
+    });
+
+    function renderReviews() {
+      const min = parseInt(document.getElementById("review-rating-filter").value);
+      const container = document.getElementById("review-list");
+      container.innerHTML = "";
+
+      currentReviews.forEach((review, idx) => {
+        if (review.rating >= min) {
+          const shortText = review.text.length > 200 ? review.text.slice(0, 200) + "..." : review.text;
+          const isLong = review.text.length > 200;
+          container.innerHTML += `
+            <div class="review" id="review-${idx}">
+              <strong>${review.author_name}</strong><br>
+              <span>${review.rating}⭐</span><br>
+              <span class="review-text">${shortText}</span>
+              ${isLong ? `<span class="read-more" onclick="toggleReview(${idx}, \`${review.text.replace(/`/g, '\\`')}\`)">Read more</span>` : ""}
+            </div>
+          `;
+        }
+      });
+    }
+
+    function renderRatingsChart(reviews) {
+      const counts = [0, 0, 0, 0, 0]; // Index 0 = 1⭐, ..., Index 4 = 5⭐
+      reviews.forEach(r => {
+        if (r.rating >= 1 && r.rating <= 5) {
+          counts[r.rating - 1]++;
+        }
+      });
+
+      const ctx = document.getElementById("ratingsChart").getContext("2d");
+      new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: ["1⭐", "2⭐", "3⭐", "4⭐", "5⭐"],
+          datasets: [{
+            label: "Number of Ratings",
+            data: counts,
+            backgroundColor: "#ffca28"
+          }]
+        },
+        options: {
+          scales: {
+            y: {
+              beginAtZero: true,
+              ticks: { precision: 0 }
+            }
+          },
+          plugins: {
+            legend: { display: false }
+          }
+        }
+      });
+    }
+
+    function toggleReview(index, fullText) {
+      const review = document.getElementById(`review-${index}`);
+      const textSpan = review.querySelector(".review-text");
+      const toggle = review.querySelector(".read-more");
+
+      if (toggle.innerText === "Read more") {
+        textSpan.innerText = fullText;
+        toggle.innerText = "Show less";
+      } else {
+        textSpan.innerText = fullText.slice(0, 200) + "...";
+        toggle.innerText = "Read more";
+      }
+    }
+
+    function hideSidebar() {
+      const sidebar = document.getElementById("review-sidebar");
+      sidebar.style.display = "none";
+      sidebar.innerHTML = "";
+    }
+
+    function clearMarkers() {
+      markers.forEach(marker => marker.setMap(null));
+      markers = [];
+    }
+
+    function getPriceRange(level) {
+      switch (level) {
+        case 0: return "Free";
+        case 1: return "₱100–₱200";
+        case 2: return "₱200–₱400";
+        case 3: return "₱400–₱700";
+        case 4: return "₱700+";
+        default: return "Unknown";
+      }
+    }
+    </script>
+  </body>
+</html>
